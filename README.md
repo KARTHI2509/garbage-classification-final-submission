@@ -1,1 +1,0 @@
-# garbage-classification-final-submission
