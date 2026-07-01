@@ -1,102 +1,62 @@
-import gradio as gr
-import tensorflow as tf
+import os
 import numpy as np
+import tensorflow as tf
+from PIL import Image
+import gradio as gr
 
-# Load trained model
-model = tf.keras.models.load_model("garbage_classifier.keras")
+# Load classes
+class_names = ['cardboard', 'glass', 'metal', 'paper', 'plastic', 'trash']
 
-# Class names (must match training order)
-class_names = ["cardboard", "glass", "metal", "paper", "plastic", "trash"]
+# Load model path
+model_path = os.getenv("MODEL_PATH", "MobileNetV3Large.keras")
+if not os.path.exists(model_path):
+    # Try same directory as script
+    alt_path = os.path.join(os.path.dirname(__file__), model_path)
+    if os.path.exists(alt_path):
+        model_path = alt_path
+    else:
+        print(f"Warning: Model file not found at {model_path}. Please train your model or place your trained MobileNetV3Large.keras model file in this directory.")
 
-# Waste disposal tips
-waste_tips = {
-    "cardboard": "♻ Recycle in dry waste bin.",
-    "glass": "⚠ Handle carefully and recycle separately.",
-    "metal": "🔩 Recycle at scrap collection centers.",
-    "paper": "📄 Reuse or recycle in paper waste bin.",
-    "plastic": "🧴 Separate by type before recycling.",
-    "trash": "🗑 Dispose in general waste."
-}
-
-
-def classify_image(image):
+model = None
+if os.path.exists(model_path):
     try:
-        # Resize image
-        image = image.resize((124, 124))
-        image = np.array(image)
-
-        # Convert grayscale to RGB if needed
-        if len(image.shape) == 2:
-            image = np.stack([image] * 3, axis=-1)
-
-        # Handle RGBA images
-        if len(image.shape) == 3 and image.shape[-1] == 4:
-            image = image[:, :, :3]
-
-        # Expand dimensions
-        image = np.expand_dims(image, axis=0)
-
-        # Predict
-        predictions = model.predict(image, verbose=0)[0]
-
-        # Top 3 predictions
-        top3_idx = np.argsort(predictions)[-3:][::-1]
-
-        top_predictions = {
-            class_names[i]: float(predictions[i])
-            for i in top3_idx
-        }
-
-        predicted_class = class_names[np.argmax(predictions)]
-        confidence = float(np.max(predictions)) * 100
-
-        tip = waste_tips[predicted_class]
-
-        result = f"""
-## ♻ Classification Result
-
-### 🏷 Category: **{predicted_class.upper()}**
-
-### 🎯 Confidence: **{confidence:.2f}%**
-
-### 💡 Disposal Tip:
-{tip}
-"""
-
-        return result, top_predictions
-
+        model = tf.keras.models.load_model(model_path)
+        print(f"Model loaded successfully from: {model_path}")
     except Exception as e:
-        return f"❌ Error: {str(e)}", {}
+        print(f"Error loading model: {e}")
 
+def classify_image(img):
+    if model is None:
+        return "Error: Model file 'MobileNetV3Large.keras' not found. Please train the model first using train.py."
+        
+    # Resize image to 124x124 pixels (matching model training input shape)
+    img = img.resize((124, 124))
+    
+    # Convert image to NumPy array with float32 type
+    img_array = np.array(img, dtype=np.float32)
+    
+    # Expand dimensions to add batch dimension
+    img_array = np.expand_dims(img_array, axis=0)
+    
+    # Make a prediction (no manual preprocessing scaling because include_preprocessing=True is in the model)
+    prediction = model.predict(img_array)
+    predicted_class_index = np.argmax(prediction)
+    predicted_class_name = class_names[predicted_class_index]
+    confidence = prediction[0][predicted_class_index]
+    
+    return f"Predicted: {predicted_class_name} (Confidence: {confidence:.2f})"
 
-# Custom theme
-custom_theme = gr.themes.Soft(
-    primary_hue="green",
-    secondary_hue="blue",
-    neutral_hue="gray"
-)
-
-# Interface
+# Define Gradio interface
 iface = gr.Interface(
     fn=classify_image,
-    inputs=gr.Image(type="pil", label="📤 Upload Waste Image"),
-    outputs=[
-        gr.Markdown(label="📋 Prediction Result"),
-        gr.Label(num_top_classes=3, label="📊 Top Predictions")
-    ],
-    title="♻ Smart Garbage Classification System",
-    description="""
-Upload an image of waste material and let AI classify it instantly.
-
-### Supported Waste Types:
-📦 Cardboard  
-🍾 Glass  
-🔩 Metal  
-📄 Paper  
-🧴 Plastic  
-🗑 Trash
-"""
+    inputs=gr.Image(type="pil"),
+    outputs="text",
+    title="Garbage Classification Web App",
+    description="Upload an image of garbage (cardboard, glass, metal, paper, plastic, trash) to classify it."
 )
 
-# Launch
-iface.launch(theme=custom_theme)
+if __name__ == "__main__":
+    # Fetch deployment host and port dynamically
+    port = int(os.getenv("PORT", 7860))
+    host = os.getenv("HOST", "0.0.0.0")
+    iface.launch(server_name=host, server_port=port)
