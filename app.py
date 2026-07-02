@@ -1,62 +1,53 @@
-import os
-import numpy as np
-import tensorflow as tf
-from PIL import Image
+from pathlib import Path
+
 import gradio as gr
+import numpy as np
+import json
+from tensorflow.keras.models import load_model
 
-# Load classes
-class_names = ['cardboard', 'glass', 'metal', 'paper', 'plastic', 'trash']
+BASE_DIR = Path(__file__).resolve().parent
+model = load_model(BASE_DIR / "garbage_classifier.keras")
 
-# Load model path
-model_path = os.getenv("MODEL_PATH", "MobileNetV3Large.keras")
-if not os.path.exists(model_path):
-    # Try same directory as script
-    alt_path = os.path.join(os.path.dirname(__file__), model_path)
-    if os.path.exists(alt_path):
-        model_path = alt_path
-    else:
-        print(f"Warning: Model file not found at {model_path}. Please train your model or place your trained MobileNetV3Large.keras model file in this directory.")
-
-model = None
-if os.path.exists(model_path):
-    try:
-        model = tf.keras.models.load_model(model_path)
-        print(f"Model loaded successfully from: {model_path}")
-    except Exception as e:
-        print(f"Error loading model: {e}")
+with open(BASE_DIR / "class_names.json", "r") as f:
+    class_names = json.load(f)
 
 def classify_image(img):
-    if model is None:
-        return "Error: Model file 'MobileNetV3Large.keras' not found. Please train the model first using train.py."
-        
-    # Resize image to 124x124 pixels (matching model training input shape)
-    img = img.resize((124, 124))
-    
-    # Convert image to NumPy array with float32 type
-    img_array = np.array(img, dtype=np.float32)
-    
-    # Expand dimensions to add batch dimension
+    img = img.resize((160,160))
+    img_array = np.array(img) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
-    
-    # Make a prediction (no manual preprocessing scaling because include_preprocessing=True is in the model)
-    prediction = model.predict(img_array)
-    predicted_class_index = np.argmax(prediction)
-    predicted_class_name = class_names[predicted_class_index]
-    confidence = prediction[0][predicted_class_index]
-    
-    return f"Predicted: {predicted_class_name} (Confidence: {confidence:.2f})"
 
-# Define Gradio interface
-iface = gr.Interface(
-    fn=classify_image,
-    inputs=gr.Image(type="pil"),
-    outputs="text",
-    title="Garbage Classification Web App",
-    description="Upload an image of garbage (cardboard, glass, metal, paper, plastic, trash) to classify it."
-)
+    predictions = model.predict(img_array)[0]
+
+    top_3_idx = predictions.argsort()[-3:][::-1]
+
+    result = {}
+    for idx in top_3_idx:
+        result[class_names[idx].capitalize()] = float(predictions[idx])
+
+    return result
+
+
+custom_css = """
+body {
+    background: linear-gradient(-45deg, #0f172a, #1e293b, #334155, #0f172a);
+}
+"""
+
+with gr.Blocks(css=custom_css) as demo:
+    gr.Markdown("# ♻ Smart Garbage Classification System")
+
+    with gr.Row():
+        image_input = gr.Image(type="pil")
+        output_label = gr.Label(num_top_classes=3)
+
+    btn = gr.Button("Analyze")
+
+    btn.click(
+        fn=classify_image,
+        inputs=image_input,
+        outputs=output_label
+    )
+
 
 if __name__ == "__main__":
-    # Fetch deployment host and port dynamically
-    port = int(os.getenv("PORT", 7860))
-    host = os.getenv("HOST", "0.0.0.0")
-    iface.launch(server_name=host, server_port=port)
+    demo.launch()
